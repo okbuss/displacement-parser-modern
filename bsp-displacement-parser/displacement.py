@@ -197,8 +197,8 @@ class Displacement:
         self.start_position = Vector(disp.startPosition)
         self.map_face_id = disp.mapFace
         self.map_face = bsp_data.m_faces[self.map_face_id]
-        self.map_surface_edge_ids = bsp_data.m_surf_edges[self.map_face.firstedge:self.map_face.firstedge+4]
-        self.map_plane = Plane(self.map_face.planenum, bsp_data)
+        self.map_surface_edge_ids = bsp_data.m_surf_edges[self.map_face.firstEdge:self.map_face.firstEdge + self.map_face.numEdges]
+        self.map_plane = Plane(self.map_face.planeNum, bsp_data)
 
         self.orientation = self.__get_orientation()
         self.face_verts = self.__get_face_verts(bsp_data)
