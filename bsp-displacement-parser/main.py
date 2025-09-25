@@ -1,3 +1,6 @@
+import os
+import sys
+import argparse
 import numpy as np
 import random
 from string import ascii_lowercase, digits
@@ -7,7 +10,6 @@ from valvebsp.lumps import *
 from displacement import Displacement, DispOrientation
 from md_report import MarkdownReport, SpotTextWriter, AllDispTextWriter  # added AllDispTextWriter
 from utils import angle_bc
-
 
 # untested
 TF_PLAYER = 83
@@ -43,18 +45,14 @@ def edge_vector(edge):
 def tris_ang(tris):
     tr_1 = tris[0].np_verts
     tr_2 = tris[1].np_verts
-
     ang = angle_bc(tr_1, tr_2)
-
     if ang < 90:
         ang = 180 - ang
-
     return ang
 
 
 def closest_power_of_two(num):
     num = abs(int(num))
-
     n = num
     n -= 1
     n |= n >> 1
@@ -64,14 +62,13 @@ def closest_power_of_two(num):
     n |= n >> 16
     n += 1
     p = n >> 1
-
     if (n - num) > (num - p):
         return p, num - p
     else:
         return n, n - num
 
 
-def has_negative_power_of_two_coord(vert, tolerance, f = False):
+def has_negative_power_of_two_coord(vert, tolerance, f=False):
     min_diff = 2 ** 32
     mp = 0
     for i in range(2):  # don't test z?
@@ -85,7 +82,6 @@ def has_negative_power_of_two_coord(vert, tolerance, f = False):
         if diff < min_diff:
             min_diff = diff
             mp = power
-
     if f:
         return mp, min_diff
     else:
@@ -97,54 +93,62 @@ def rand_img_name():
 
 
 def main(map_name):
+    # the app copies BSPs to ./maps/<name>.bsp and runs us with <name>
     bsp = Bsp(f'maps/{map_name}.bsp', 'TF2')
     bsp_data = BspData(bsp)
 
     md = MarkdownReport(map_name, len(bsp_data.m_displacements), len(bsp_data.m_displacement_verts))
 
-    # ---- writers: SPOTs (existing) + ALL GRID VERTS (new) -------------------
+    # writers: SPOTs (existing) + ALL GRID VERTS (new)
     spot_txt = SpotTextWriter(map_name)
     grid_txt = AllDispTextWriter(map_name)   # writes DISPGRID/POWER/POST + DVERT + ENDDISP
 
     spot_index = 0  # global running id across the whole map
+    total = len(bsp_data.m_displacements)
+    print(f"[INFO] Map '{map_name}' — {total} displacements", flush=True)
 
-    for i in range(0, len(bsp_data.m_displacements)):
+    for i in range(total):
         try:
             disp = Displacement(i, bsp_data)
 
-            # --- NEW: write per-displacement grid once, in the Lua-friendly format
+            # per-displacement grid in Lua-friendly format
             grid_txt.begin_displacement(disp_idx=disp.idx, power=disp.power, post_spacing=disp.post_spacing)
             for sv in disp.surface:           # row-major, size = post_spacing*post_spacing
                 grid_txt.write_vert(sv.coord)
             grid_txt.end_displacement()
 
         except AssertionError:
-            print(f'[Parse Error] {i} Bad disp, unpack first?, power = {bsp_data.m_displacements[i].power}')
+            print(f'[Parse Error] {i} Bad disp, unpack first?, power = {bsp_data.m_displacements[i].power}', flush=True)
             continue
 
         # Skip horizontal/down-facing as before
         if disp.orientation in [DispOrientation.HORIZONTAL, DispOrientation.HORIZONTAL_DOWN]:
             continue
 
-        print(f'[IDX] {i}')
+        if i % 10 == 0:
+            print(f"[PROGRESS] {i}/{total}", flush=True)
+
+        print(f'[IDX] {i}', flush=True)
         heading_added = False
 
         surface = disp.surface
         for edge in disp.surface_edges:
+            if edge.is_ceiling is None:
+                # Safety in case API changed
+                continue
+            if edge.is_ceiling(disp.orientation)[0] is False:
+                continue
             if edge.is_tr_edge or len(edge.triangles) != 2:
                 continue
 
             is_ceiling, high, low = edge.is_ceiling(disp.orientation)
             diff = abs(high - low)
-            if not is_ceiling:
-                continue
-
             colormap = ['r' if e.idx in [edge.start.idx, edge.end.idx] else 'y' for e in surface]
             edge_vec = edge_vector(edge)
             tris = list(edge.triangles)
             try:
                 ang = tris_ang(tris)
-            except:
+            except Exception:
                 ang = -1
 
             if diff < Criteria.min_plane_dist_diff or not (Criteria.min_angle < ang < Criteria.max_angle) or abs(edge_vec[2]) < Criteria.min_height:
@@ -203,18 +207,34 @@ def main(map_name):
                 b.reset_color()
 
     md.save()
-
+    print("[DONE] Reports written; verts/spots text files saved.", flush=True)
 
 
 def main_interactive(map_name, index):
     bsp = Bsp(f'maps/{map_name}.bsp', 'TF2')
     bsp_data = BspData(bsp)
-
     disp = Displacement(index, bsp_data)
-    print(disp.orientation)
-    print('[SETPOS] ', disp.get_facing_setpos())
+    print(disp.orientation, flush=True)
+    print('[SETPOS] ', disp.get_facing_setpos(), flush=True)
     disp.draw_triangulated(close=False)
 
 
-if __name__ == '__main__':
-    main('cp_coldfront')
+def _basename_no_ext(path_or_name: str) -> str:
+    base = os.path.basename(path_or_name)
+    if base.lower().endswith(".bsp"):
+        base = base[:-4]
+    return base
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description="Displacement parser for TF2")
+    ap.add_argument("map", help="Map basename (e.g. cp_badlands) or a full path to a .bsp")
+    ap.add_argument("--interactive", type=int, metavar="INDEX", help="Open a specific displacement index interactively")
+    args = ap.parse_args()
+
+    name = _basename_no_ext(args.map)
+
+    if args.interactive is not None:
+        main_interactive(name, args.interactive)
+    else:
+        main(name)
