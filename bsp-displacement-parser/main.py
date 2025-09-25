@@ -5,7 +5,7 @@ from valvebsp import Bsp
 from valvebsp.lumps import *
 
 from displacement import Displacement, DispOrientation
-from md_report import MarkdownReport
+from md_report import MarkdownReport, SpotTextWriter, AllDispTextWriter  # added AllDispTextWriter
 from utils import angle_bc
 
 
@@ -102,13 +102,27 @@ def main(map_name):
 
     md = MarkdownReport(map_name, len(bsp_data.m_displacements), len(bsp_data.m_displacement_verts))
 
+    # ---- writers: SPOTs (existing) + ALL GRID VERTS (new) -------------------
+    spot_txt = SpotTextWriter(map_name)
+    grid_txt = AllDispTextWriter(map_name)   # writes DISPGRID/POWER/POST + DVERT + ENDDISP
+
+    spot_index = 0  # global running id across the whole map
+
     for i in range(0, len(bsp_data.m_displacements)):
         try:
             disp = Displacement(i, bsp_data)
+
+            # --- NEW: write per-displacement grid once, in the Lua-friendly format
+            grid_txt.begin_displacement(disp_idx=disp.idx, power=disp.power, post_spacing=disp.post_spacing)
+            for sv in disp.surface:           # row-major, size = post_spacing*post_spacing
+                grid_txt.write_vert(sv.coord)
+            grid_txt.end_displacement()
+
         except AssertionError:
             print(f'[Parse Error] {i} Bad disp, unpack first?, power = {bsp_data.m_displacements[i].power}')
             continue
 
+        # Skip horizontal/down-facing as before
         if disp.orientation in [DispOrientation.HORIZONTAL, DispOrientation.HORIZONTAL_DOWN]:
             continue
 
@@ -141,11 +155,6 @@ def main(map_name):
 
             other_verts = (set(tris[0].verts) | set(tris[1].verts)) - {edge.start, edge.end}
 
-            print(other_verts)
-            print(high)
-            print(list(other_verts)[0].distance_from_plane)
-            print(list(other_verts)[1].distance_from_plane)
-
             for b in tris:
                 b.color = 'r'
 
@@ -155,14 +164,46 @@ def main(map_name):
             if not heading_added:
                 md.next_displacement(i, disp.get_facing_setpos())
                 heading_added = True
-            md.add_spot(img_name, ang, diff, abs(edge_vec[2]), edge.start.coord, edge.end.coord,
-                        has_negative_power_of_two_coord(edge.start, Criteria.power_diff_tolerance, True),
-                        has_negative_power_of_two_coord(edge.end, Criteria.power_diff_tolerance, True))
+
+            # Start/End power-of-two info
+            start_pow_info = has_negative_power_of_two_coord(edge.start, Criteria.power_diff_tolerance, True)
+            end_pow_info   = has_negative_power_of_two_coord(edge.end,   Criteria.power_diff_tolerance, True)
+            start_pow = start_pow_info[0]
+            end_pow   = end_pow_info[0]
+
+            md.add_spot(
+                img_name, ang, diff, abs(edge_vec[2]),
+                edge.start.coord, edge.end.coord,
+                start_pow_info, end_pow_info
+            )
+
+            # export SPOT verts (existing flow)
+            unique = {}
+            for t in tris:
+                for v in t.verts:
+                    c = v.coord
+                    key = (float(c[0]), float(c[1]), float(c[2]))
+                    unique[key] = key
+
+            spot_index += 1
+            spot_txt.write_spot(
+                spot_id=spot_index,
+                disp_idx=disp.idx,
+                angle_deg=ang,
+                plane_diff=diff,
+                height=abs(edge_vec[2]),
+                start_power=start_pow,
+                end_power=end_pow,
+                start_coord=edge.start.coord,
+                end_coord=edge.end.coord,
+                verts=list(unique.values())
+            )
 
             for b in tris:
                 b.reset_color()
 
     md.save()
+
 
 
 def main_interactive(map_name, index):
